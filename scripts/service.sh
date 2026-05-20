@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-cd ../deepface/api/src
+cd ..
 
 # run the service with flask - not for production purposes
 # python api.py
 
 # run the service with gunicorn - for prod purposes
-gunicorn --workers=1 --timeout=3600 --bind=0.0.0.0:5005 "app:create_app()"
+export DEEPFACE_GUNICORN_BIND="${DEEPFACE_GUNICORN_BIND:-0.0.0.0:5005}"
+export DEEPFACE_GUNICORN_TIMEOUT="${DEEPFACE_GUNICORN_TIMEOUT:-3600}"
+
+exec python -m deepface.api.src.server_entrypoint "$@"

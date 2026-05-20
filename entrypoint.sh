@@ -1,5 +1,8 @@
-# Example content
-echo "Starting the application..."
-exec "$@"
+#!/usr/bin/env sh
 
-gunicorn --workers=1 --timeout=7200 --bind=0.0.0.0:5000 --log-level=debug --access-logformat='%(h)s - - [%(t)s] "%(r)s" %(s)s %(b)s %(L)s' --access-logfile=- "app:create_app()"
+export DEEPFACE_GUNICORN_BIND="${DEEPFACE_GUNICORN_BIND:-0.0.0.0:5000}"
+export DEEPFACE_GUNICORN_TIMEOUT="${DEEPFACE_GUNICORN_TIMEOUT:-7200}"
+export DEEPFACE_GUNICORN_LOG_LEVEL="${DEEPFACE_GUNICORN_LOG_LEVEL:-debug}"
+
+cd /app
+exec python -m deepface.api.src.server_entrypoint "$@"
