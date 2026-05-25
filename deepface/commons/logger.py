@@ -3,7 +3,7 @@ import sys
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Any, Optional, TextIO, Tuple
+from typing import Any, Optional, TextIO, Tuple, cast
 from xml.etree import ElementTree as ET
 
 
@@ -170,19 +170,29 @@ class Logger:
         event_timestamp = datetime.now(timezone.utc)
         log_file_path = self._get_log_file_path(file_timestamp)
 
-        with self._write_lock:
-            os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+        try:
+            with self._write_lock:
+                os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
 
-            tree, root = self._load_log_tree(log_file_path)
-            self._append_event(
-                root=root,
-                event_type=event_type,
-                level=level,
-                timestamp=self._format_event_timestamp(event_timestamp),
+                tree, root = self._load_log_tree(log_file_path)
+                self._append_event(
+                    root=root,
+                    event_type=event_type,
+                    level=level,
+                    timestamp=self._format_event_timestamp(event_timestamp),
+                    message=str(message),
+                )
+                self._indent_xml(root)
+                tree.write(log_file_path, encoding="utf-8", xml_declaration=True)
+        except OSError as err:
+            self._handle_log_write_failure(
                 message=str(message),
+                event_type=event_type,
+                log_file_path=log_file_path,
+                err=err,
+                mirror_to_console=mirror_to_console,
             )
-            self._indent_xml(root)
-            tree.write(log_file_path, encoding="utf-8", xml_declaration=True)
+            return
 
         if mirror_to_console:
             self._write_console_message(message=str(message), event_type=event_type)
@@ -204,7 +214,7 @@ class Logger:
         if os.path.exists(log_file_path):
             try:
                 tree = ET.parse(log_file_path)
-                return tree, tree.getroot()
+                return cast(Tuple[ET.ElementTree, ET.Element], (tree, tree.getroot()))
             except ET.ParseError:
                 pass
 
@@ -257,7 +267,7 @@ class Logger:
             sys.stderr = self._stderr_interceptor
             self._redirect_stream_handlers(original_stderr, self._stderr_interceptor)
 
-    def _redirect_stream_handlers(self, source_stream: TextIO, target_stream: TextIO) -> None:
+    def _redirect_stream_handlers(self, source_stream: TextIO, target_stream: Any) -> None:
         all_loggers = [logging.getLogger()]
         all_loggers.extend(
             logger
@@ -281,9 +291,42 @@ class Logger:
         if should_mirror_console.lower() in {"0", "false", "no"}:
             return
 
-        stream = self._console_stderr if event_type in {"Error", "Critical"} else self._console_stdout
-        stream.write(message + "\n")
-        stream.flush()
+        stream = self._get_console_stream(event_type=event_type)
+        self._write_console_line(stream=stream, message=message)
+
+    def _handle_log_write_failure(
+        self,
+        message: str,
+        event_type: str,
+        log_file_path: str,
+        err: OSError,
+        mirror_to_console: bool,
+    ) -> None:
+        if mirror_to_console:
+            self._write_console_message(message=message, event_type=event_type)
+
+        self._write_console_line(
+            stream=self._get_console_stream(event_type="Error"),
+            message=f"Logger file write failed for {log_file_path}: {err}",
+        )
+
+    def _get_console_stream(self, event_type: str) -> TextIO:
+        preferred_stream = self._console_stderr if event_type in {"Error", "Critical"} else self._console_stdout
+        if preferred_stream is not None:
+            return preferred_stream
+
+        fallback_stream = sys.__stderr__ if event_type in {"Error", "Critical"} else sys.__stdout__
+        if fallback_stream is not None:
+            return fallback_stream
+
+        return cast(TextIO, sys.stdout if event_type not in {"Error", "Critical"} else sys.stderr)
+
+    def _write_console_line(self, stream: TextIO, message: str) -> None:
+        try:
+            stream.write(message + "\n")
+            stream.flush()
+        except Exception:
+            pass
 
     def _indent_xml(self, element: ET.Element, level: int = 0) -> None:
         indentation = "\n" + level * "\t"
